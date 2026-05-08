@@ -1,0 +1,363 @@
+# OLA-Place
+
+**OLA-Place: Object-Level Alignment for Text-to-Point-Cloud Place Retrieval**
+
+This repository contains a lightweight open-source release focused only on the **object-level coarse retrieval branch**. It is extracted from a larger text-to-point-cloud localization project and keeps the components required to reproduce **object-level coarse-stage retrieval** on **KITTI360Pose**.
+
+OLA-Place is intended for researchers who want to study or reproduce object-centric retrieval without the additional global branch, relation branch, or fine localization stage.
+
+## Highlights
+
+- Object-level text-to-cell coarse retrieval.
+- Object-centric language and point-cloud encoding.
+- Scene-graph-aware object aggregation.
+- Standalone training and evaluation scripts.
+- Minimal repository layout for open-source release.
+
+## Table of Contents
+
+- [1. Repository Structure](#1-repository-structure)
+- [2. Environment Setup](#2-environment-setup)
+- [3. Dataset Preparation](#3-dataset-preparation)
+- [4. Checkpoints and External Models](#4-checkpoints-and-external-models)
+- [5. Training](#5-training)
+- [6. Evaluation](#6-evaluation)
+- [7. Expected Outputs](#7-expected-outputs)
+- [8. Reproducibility Notes](#8-reproducibility-notes)
+- [9. Troubleshooting](#9-troubleshooting)
+- [10. Citation](#10-citation)
+
+## 1. Repository Structure
+
+```text
+OLA-Place/
+├── README.md
+├── requirements.txt
+├── .gitignore
+├── branch_training_commands.md
+├── dataloading/
+│   └── kitti360pose/
+├── datapreparation/
+│   └── kitti360pose/
+├── evaluation/
+│   ├── args.py
+│   ├── object_coarse.py
+│   └── utils.py
+├── models/
+│   ├── branches/
+│   │   ├── __init__.py
+│   │   └── object_branch.py
+│   ├── pointcloud/
+│   ├── bir_lstm.py
+│   ├── cell_retrieval.py
+│   ├── cross_matcher.py
+│   ├── information_symplectic_encoder.py
+│   ├── information_symplectic_encoder_light.py
+│   ├── language_encoder.py
+│   ├── mamba_model.py
+│   ├── msg_encoder.py
+│   ├── object_encoder.py
+│   ├── pointnet2.py
+│   └── riemannian_geometry.py
+└── training/
+    ├── args.py
+    ├── losses.py
+    ├── train_object_branch.py
+    ├── plots.py
+    └── utils.py
+```
+
+Expected local-only directories after data/model download:
+
+```text
+OLA-Place/
+├── data/
+├── checkpoints/
+└── results/
+```
+
+## 2. Environment Setup
+
+### 2.1 Clone the repository
+
+```bash
+git clone https://github.com/YOUR_USERNAME/OLA-Place.git
+cd OLA-Place
+```
+
+### 2.2 Create the environment
+
+```bash
+conda create -n olaplace python=3.10 -y
+conda activate olaplace
+```
+
+### 2.3 Install PyTorch
+
+A tested setup uses PyTorch with CUDA 11.3:
+
+```bash
+conda install pytorch==1.11.0 torchvision==0.12.0 torchaudio==0.11.0 cudatoolkit=11.3 -c pytorch -y
+```
+
+If your environment differs, install a matching PyTorch build first.
+
+### 2.4 Install Python dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+This project uses `torch_geometric` and related compiled packages. If installation fails, install compatible wheels matching your PyTorch/CUDA configuration.
+
+### 2.5 Prepare the text backbone
+
+The default commands use:
+
+```bash
+--hungging_model t5-large
+```
+
+You can either:
+
+- place a local `t5-large/` directory in the repository root, or
+- replace `t5-large` with a local Hugging Face model path.
+
+## 3. Dataset Preparation
+
+OLA-Place uses the public **KITTI360Pose** benchmark.
+
+### 3.1 Download the dataset
+
+Official download and reference pages:
+
+- KITTI360Pose: <https://cvg.cit.tum.de/webshare/g/text2pose/>
+- Text2Pos paper: <https://arxiv.org/abs/2203.15125>
+
+After downloading, place the processed files under:
+
+```text
+OLA-Place/data/KITTI360Pose/k360_30-10_scG_pd10_pc4_spY_all/
+```
+
+Expected structure:
+
+```text
+data/
+└── KITTI360Pose/
+    └── k360_30-10_scG_pd10_pc4_spY_all/
+        ├── cells/
+        ├── direction/
+        ├── poses/
+        ├── street_centers/
+        └── visloc/
+```
+
+Most commands in this README use:
+
+```bash
+--base_path ./data/KITTI360Pose/k360_30-10_scG_pd10_pc4_spY_all/
+```
+
+### 3.2 Optional preprocessing
+
+If you need to regenerate or inspect processed dataset files, see:
+
+- `datapreparation/kitti360pose/prepare.py`
+- `datapreparation/kitti360pose/prepare_images.py`
+- `datapreparation/kitti360pose/select.py`
+- `datapreparation/kitti360pose/utils.py`
+
+## 4. Checkpoints and External Models
+
+This repository does not include large model weights.
+
+Create the following local layout:
+
+```text
+checkpoints/
+├── object/
+│   └── object_best.pth
+└── pointnet_acc0.86_lr1_p256.pth
+```
+
+Required files:
+
+| Component | Example path | Description |
+| --- | --- | --- |
+| PointNet backbone | `./checkpoints/pointnet_acc0.86_lr1_p256.pth` | 3D object encoder backbone |
+| Object branch checkpoint | `./checkpoints/object/object_best.pth` | trained object-level coarse retrieval model |
+
+If you train from scratch, the object checkpoint will be generated by `training/train_object_branch.py`.
+
+## 5. Training
+
+OLA-Place only keeps the **object-level coarse branch**.
+
+### 5.1 Train the object-level coarse branch
+
+```bash
+python -m training.train_object_branch \
+  --batch_size 64 \
+  --coarse_embed_dim 256 \
+  --shuffle \
+  --base_path ./data/KITTI360Pose/k360_30-10_scG_pd10_pc4_spY_all/ \
+  --use_features class color position num \
+  --no_pc_augment \
+  --fixed_embedding \
+  --epochs 32 \
+  --learning_rate 0.0001 \
+  --lr_scheduler step \
+  --lr_step 5 \
+  --lr_gamma 0.5 \
+  --temperature 0.05 \
+  --ranking_loss CCL \
+  --num_of_hidden_layer 3 \
+  --alpha 2 \
+  --hungging_model t5-large \
+  --pointnet_path ./checkpoints/pointnet_acc0.86_lr1_p256.pth \
+  --num_mentioned 6 \
+  --object_size 28 \
+  --inter_module_num_heads 4 \
+  --inter_module_num_layers 1 \
+  --intra_module_num_heads 4 \
+  --intra_module_num_layers 1 \
+  --cpus 4
+```
+
+### 5.2 Optional Riemannian variant
+
+The object branch exposes an optional Riemannian feature transform. To enable it during training:
+
+```bash
+python -m training.train_object_branch \
+  --batch_size 64 \
+  --base_path ./data/KITTI360Pose/k360_30-10_scG_pd10_pc4_spY_all/ \
+  --use_features class color position num \
+  --no_pc_augment \
+  --fixed_embedding \
+  --epochs 32 \
+  --learning_rate 0.0001 \
+  --temperature 0.05 \
+  --alpha 2 \
+  --hungging_model t5-large \
+  --pointnet_path ./checkpoints/pointnet_acc0.86_lr1_p256.pth \
+  --use_riemannian \
+  --riemannian_manifold hyperbolic
+```
+
+## 6. Evaluation
+
+### 6.1 Evaluate object-level coarse retrieval on the validation set
+
+```bash
+python -m evaluation.object_coarse \
+  --object_checkpoint ./checkpoints/object/object_best.pth \
+  --base_path ./data/KITTI360Pose/k360_30-10_scG_pd10_pc4_spY_all/ \
+  --batch_size 64 \
+  --coarse_embed_dim 256 \
+  --no_pc_augment \
+  --fixed_embedding \
+  --use_features class color position num \
+  --hungging_model t5-large \
+  --pointnet_path ./checkpoints/pointnet_acc0.86_lr1_p256.pth \
+  --num_mentioned 6 \
+  --object_size 28 \
+  --inter_module_num_heads 4 \
+  --inter_module_num_layers 1 \
+  --intra_module_num_heads 4 \
+  --intra_module_num_layers 1 \
+  --num_of_hidden_layer 3 \
+  --alpha 2 \
+  --top_k 1 3 5 10
+```
+
+### 6.2 Evaluate object-level coarse retrieval on the test set
+
+```bash
+python -m evaluation.object_coarse \
+  --object_checkpoint ./checkpoints/object/object_best.pth \
+  --base_path ./data/KITTI360Pose/k360_30-10_scG_pd10_pc4_spY_all/ \
+  --use_test_set \
+  --batch_size 64 \
+  --coarse_embed_dim 256 \
+  --no_pc_augment \
+  --fixed_embedding \
+  --use_features class color position num \
+  --hungging_model t5-large \
+  --pointnet_path ./checkpoints/pointnet_acc0.86_lr1_p256.pth \
+  --num_mentioned 6 \
+  --object_size 28 \
+  --inter_module_num_heads 4 \
+  --inter_module_num_layers 1 \
+  --intra_module_num_heads 4 \
+  --intra_module_num_layers 1 \
+  --num_of_hidden_layer 3 \
+  --alpha 2 \
+  --top_k 1 3 5 10
+```
+
+The script reports:
+
+- `Hit@K`: whether the ground-truth cell is retrieved within top-K.
+- `Close@K`: whether a top-K retrieved cell center lies within half a cell size of the target pose.
+
+## 7. Expected Outputs
+
+Running training or evaluation may create:
+
+```text
+checkpoints/object/
+results/
+data/KITTI360Pose/evaluation_logs/
+```
+
+These folders are excluded from version control and should remain local.
+
+## 8. Reproducibility Notes
+
+- Run all commands from the repository root.
+- Keep the text encoder setting consistent across training and evaluation.
+- Make sure `num_mentioned`, `object_size`, and `coarse_embed_dim` match between training and inference.
+- Use the same PointNet backbone checkpoint for reproducible results.
+- If you compare with broader systems, note that OLA-Place contains only the object-level coarse stage.
+
+## 9. Troubleshooting
+
+### `ModuleNotFoundError`
+
+Run commands from the repository root:
+
+```bash
+cd OLA-Place
+```
+
+Then use module mode:
+
+```bash
+python -m training.train_object_branch --help
+python -m evaluation.object_coarse --help
+```
+
+### Checkpoint loading errors
+
+Make sure:
+
+- `--object_checkpoint` points to a valid object-branch checkpoint;
+- `--pointnet_path` points to the required PointNet backbone weights.
+
+### Text model path errors
+
+If `t5-large` cannot be resolved automatically, pass a local path instead:
+
+```bash
+--hungging_model ./t5-large
+```
+
+### PyTorch Geometric installation issues
+
+Install compatible versions of `torch-scatter`, `torch-sparse`, `torch-cluster`, `torch-spline-conv`, and `torch_geometric` for your PyTorch/CUDA setup.
+
+## 10. Citation
+
+If you use OLA-Place in your work, please cite the final paper/repository entry once it is publicly released.
